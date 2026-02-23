@@ -8,6 +8,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -23,6 +24,43 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+    :root {
+        --bg-soft: #f4f7fb;
+        --panel-border: #d9e2ec;
+        --ink-main: #102a43;
+        --ink-dim: #486581;
+    }
+    .stApp {
+        background:
+            radial-gradient(1200px 400px at 10% -10%, #dbeafe 0%, transparent 60%),
+            radial-gradient(900px 500px at 100% 0%, #fde68a 0%, transparent 48%),
+            var(--bg-soft);
+        color: var(--ink-main);
+    }
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0f172a 0%, #111827 60%, #1f2937 100%);
+    }
+    [data-testid="stSidebar"] * {
+        color: #e5e7eb !important;
+    }
+    [data-testid="stMetric"] {
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid var(--panel-border);
+        border-radius: 12px;
+        padding: 10px 12px;
+        box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
+    }
+    div[data-baseweb="tab-list"] button {
+        border-radius: 10px 10px 0 0;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -82,6 +120,44 @@ def extract_degree(major: str) -> str:
                  r"|\bmaster\b|\bms\b", ml):                      return "Master's"
     if re.search(r"\bb\.?s\.?\b|\bbachelor\b|\bundergrad\b", ml): return "Bachelor's"
     return "Not Specified"
+
+
+def normalize_major(major: str) -> str:
+    """Map raw major text to a canonical major group (merge synonyms)."""
+    ml = str(major).strip().lower()
+    if not ml:
+        return "Other / Unspecified"
+
+    if re.search(
+        r"\b(cs|c\.?s\.?|computer science|comp sci|informatics|"
+        r"software|ai|artificial intelligence|machine learning|"
+        r"deep learning|data science|cybersecurity|cyber security)\b",
+        ml,
+    ):
+        return "Computer Science / AI / Data"
+    if re.search(r"\b(electrical|electronics|ee|ece)\b", ml):
+        return "Electrical & Computer Engineering"
+    if re.search(r"\b(mechanical|me)\b", ml):
+        return "Mechanical Engineering"
+    if re.search(r"\b(chemical|chem eng|che)\b", ml):
+        return "Chemical Engineering"
+    if re.search(r"\b(civil|structural|construction)\b", ml):
+        return "Civil Engineering"
+    if re.search(r"\b(material|metallurgy|polymer)\b", ml):
+        return "Materials Engineering"
+    if re.search(r"\b(biomedical|bioengineering|bme)\b", ml):
+        return "Biomedical Engineering"
+    if re.search(r"\b(biology|biochem|biochemistry|genetics|molecular)\b", ml):
+        return "Biology / Biochemistry"
+    if re.search(r"\b(physics|applied physics|astro)\b", ml):
+        return "Physics"
+    if re.search(r"\b(chemistry)\b", ml):
+        return "Chemistry"
+    if re.search(r"\b(math|statistics|stat|applied math)\b", ml):
+        return "Math / Statistics"
+    if re.search(r"\b(mba|business|finance|accounting|economics)\b", ml):
+        return "Business / Finance / Economics"
+    return "Other STEM / Misc"
 
 
 def generate_months(start: str, end: str) -> list:
@@ -161,6 +237,7 @@ def make_sample_data() -> pd.DataFrame:
     df["Complete Date"] = pd.to_datetime(
         df["Complete Date"].replace("0000-00-00", pd.NaT), errors="coerce")
     df["Degree"] = df["Major"].apply(extract_degree)
+    df["Major Group"] = df["Major"].apply(normalize_major)
     return df
 
 
@@ -191,6 +268,23 @@ def location_stats(df: pd.DataFrame) -> pd.DataFrame:
             "90th Pct (days)":   round(cleared["Waiting Days"].quantile(0.90), 0) if len(cleared) > 0 else float("nan"),
         })
     return pd.DataFrame(rows).sort_values("Total Cases", ascending=False).reset_index(drop=True)
+
+
+def show_chart(fig: go.Figure, height: Optional[int] = None) -> None:
+    """Render chart with a consistent visual style."""
+    fig.update_layout(
+        template="plotly_white",
+        font=dict(family="Avenir Next, Arial, sans-serif", color="#102a43", size=13),
+        paper_bgcolor="rgba(255,255,255,0.92)",
+        plot_bgcolor="rgba(255,255,255,0.92)",
+        margin=dict(t=30, b=24, l=12, r=12),
+        hoverlabel=dict(bgcolor="white"),
+    )
+    if height is not None:
+        fig.update_layout(height=height)
+    fig.update_xaxes(showgrid=True, gridcolor="#e9eef5")
+    fig.update_yaxes(showgrid=True, gridcolor="#e9eef5")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # ── Persistent disk cache ─────────────────────────────────────────────────────
@@ -369,6 +463,7 @@ def load_data(start: str, end: str) -> pd.DataFrame:
                 df[col].replace("0000-00-00", pd.NaT), errors="coerce")
     if "Major" in df.columns:
         df["Degree"] = df["Major"].fillna("").apply(extract_degree)
+        df["Major Group"] = df["Major"].fillna("").apply(normalize_major)
     return df
 
 
@@ -464,6 +559,9 @@ if df is None or df.empty:
     )
     st.stop()
 
+if "Major" in df.columns and "Major Group" not in df.columns:
+    df["Major Group"] = df["Major"].fillna("").apply(normalize_major)
+
 # ── Global sidebar filters ────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -471,7 +569,19 @@ with st.sidebar:
     st.subheader("Global Filters")
 
     visa_opts = sorted(df["Visa Type"].dropna().unique()) if "Visa Type" in df.columns else []
-    sel_visa  = st.multiselect("Visa Type", visa_opts, default=visa_opts)
+    preset = st.radio(
+        "Quick Visa Preset",
+        ["All", "Student (F/J)", "Work (H/L/O)"],
+        index=0,
+        key="visa_preset",
+    )
+    if preset == "Student (F/J)":
+        visa_default = [v for v in visa_opts if v.startswith("F") or v.startswith("J")]
+    elif preset == "Work (H/L/O)":
+        visa_default = [v for v in visa_opts if v.startswith("H") or v.startswith("L") or v.startswith("O")]
+    else:
+        visa_default = visa_opts
+    sel_visa  = st.multiselect("Visa Type", visa_opts, default=visa_default)
 
     cons_opts = sorted(df["Consulate"].dropna().unique()) if "Consulate" in df.columns else []
     sel_cons  = st.multiselect("Consulate", cons_opts, default=cons_opts)
@@ -519,6 +629,41 @@ m4.metric("Rejected",     f"{reject:,}")
 m5.metric("Clear Rate",   cr_pct)
 m6.metric("Median Wait",  med_wait)
 
+ins1, ins2, ins3 = st.columns(3)
+dominant_visa = filt["Visa Type"].value_counts().index[0] if "Visa Type" in filt.columns and not filt.empty else "N/A"
+decided_for_best = filt[filt["Status"].isin(["Clear", "Reject"])]
+if not decided_for_best.empty:
+    best_rate_df = (decided_for_best.groupby("Consulate")
+                    .agg(
+                        n=("Status", "size"),
+                        rate=("Status", lambda x: (x == "Clear").sum() / len(x)),
+                    )
+                    .reset_index())
+    best_rate_df = best_rate_df[best_rate_df["n"] >= 10]
+    best_cons_rate = best_rate_df.sort_values("rate", ascending=False).head(1)
+    best_rate_txt = (f"{best_cons_rate.iloc[0]['Consulate']} ({best_cons_rate.iloc[0]['rate']*100:.1f}%)"
+                     if not best_cons_rate.empty else "N/A")
+else:
+    best_rate_txt = "N/A"
+
+if not cleared_all.empty:
+    best_wait_df = (cleared_all.groupby("Consulate")
+                    .agg(
+                        n=("Waiting Days", "size"),
+                        median_wait=("Waiting Days", "median"),
+                    )
+                    .reset_index())
+    best_wait_df = best_wait_df[best_wait_df["n"] >= 10]
+    best_wait_row = best_wait_df.sort_values("median_wait", ascending=True).head(1)
+    fastest_txt = (f"{best_wait_row.iloc[0]['Consulate']} ({best_wait_row.iloc[0]['median_wait']:.0f}d)"
+                   if not best_wait_row.empty else "N/A")
+else:
+    fastest_txt = "N/A"
+
+ins1.info(f"Top volume visa: **{dominant_visa}**")
+ins2.info(f"Best clear rate (N>=10): **{best_rate_txt}**")
+ins3.info(f"Fastest median wait (N>=10): **{fastest_txt}**")
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📋 Overview",
@@ -543,7 +688,7 @@ with tab1:
         fig.update_traces(textposition="inside", textinfo="percent+label+value",
                           pull=[0.03] * len(sc))
         fig.update_layout(margin=dict(t=20, b=10, l=10, r=10))
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     with c2:
         st.subheader("Cases by Visa Type")
@@ -553,7 +698,7 @@ with tab1:
                      barmode="stack", text_auto=True,
                      category_orders={"Visa Type": filt["Visa Type"].value_counts().index.tolist()})
         fig.update_layout(margin=dict(t=20, b=10), xaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     c3, c4 = st.columns(2)
 
@@ -566,7 +711,7 @@ with tab1:
                      category_orders={"Consulate": filt["Consulate"].value_counts().index.tolist()})
         fig.update_layout(margin=dict(t=20, b=10),
                           yaxis={"categoryorder": "total ascending"}, yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     with c4:
         st.subheader("New vs. Renewal")
@@ -576,21 +721,21 @@ with tab1:
                          color="Status", color_discrete_map=STATUS_COLORS,
                          barmode="group", text_auto=True)
             fig.update_layout(margin=dict(t=20, b=10), xaxis_title="")
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
 
-    st.subheader("Top 25 Majors")
-    if "Major" in filt.columns:
-        top25 = filt["Major"].value_counts().nlargest(25).index
-        md = filt[filt["Major"].isin(top25)]
-        mc = md.groupby(["Major", "Status"]).size().reset_index(name="Count")
-        fig = px.bar(mc, x="Count", y="Major",
+    st.subheader("Top 20 Major Groups")
+    if "Major Group" in filt.columns:
+        top_maj = filt["Major Group"].value_counts().nlargest(20).index
+        md = filt[filt["Major Group"].isin(top_maj)]
+        mc = md.groupby(["Major Group", "Status"]).size().reset_index(name="Count")
+        fig = px.bar(mc, x="Count", y="Major Group",
                      color="Status", color_discrete_map=STATUS_COLORS,
                      barmode="stack", orientation="h", text_auto=True,
-                     category_orders={"Major": md["Major"].value_counts().index.tolist()},
+                     category_orders={"Major Group": md["Major Group"].value_counts().index.tolist()},
                      height=600)
         fig.update_layout(margin=dict(t=20, b=10),
                           yaxis={"categoryorder": "total ascending"}, yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     st.subheader("Monthly Case Trend")
     if "Month" in filt.columns:
@@ -598,7 +743,7 @@ with tab1:
         fig = px.line(mon, x="Month", y="Count",
                       color="Status", color_discrete_map=STATUS_COLORS, markers=True)
         fig.update_layout(xaxis_tickangle=-45, margin=dict(t=20, b=60))
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -613,7 +758,7 @@ with tab2:
     with lf1:
         t2_visa = st.multiselect("Visa Type", visa_opts, default=visa_opts, key="t2v")
     with lf2:
-        major_kw = st.text_input("Major keyword filter (e.g. CS, Biology)",
+        major_kw = st.text_input("Major keyword / group (e.g. CS, Biology)",
                                  placeholder="Leave blank for all", key="t2m")
     with lf3:
         t2_degree = st.multiselect("Degree level", DEGREE_ORDER,
@@ -623,8 +768,13 @@ with tab2:
     loc_df = filt.copy()
     if t2_visa:
         loc_df = loc_df[loc_df["Visa Type"].isin(t2_visa)]
-    if major_kw.strip() and "Major" in loc_df.columns:
-        loc_df = loc_df[loc_df["Major"].str.contains(major_kw.strip(), case=False, na=False)]
+    if major_kw.strip():
+        major_mask = pd.Series(False, index=loc_df.index)
+        if "Major" in loc_df.columns:
+            major_mask = major_mask | loc_df["Major"].str.contains(major_kw.strip(), case=False, na=False)
+        if "Major Group" in loc_df.columns:
+            major_mask = major_mask | loc_df["Major Group"].str.contains(major_kw.strip(), case=False, na=False)
+        loc_df = loc_df[major_mask]
     if "Degree" in loc_df.columns and t2_degree:
         loc_df = loc_df[loc_df["Degree"].isin(t2_degree)]
 
@@ -664,7 +814,7 @@ with tab2:
         fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
         fig.update_layout(margin=dict(t=20, b=10, r=60),
                           coloraxis_showscale=False, yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     st.divider()
 
@@ -681,7 +831,7 @@ with tab2:
         )
         fig.update_layout(margin=dict(t=20, b=10), showlegend=False,
                           xaxis_title="", yaxis_title="Days to Clear")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
     else:
         st.info("No cleared cases with waiting-day data for this filter.")
 
@@ -709,7 +859,7 @@ with tab2:
             margin=dict(t=30, b=10),
             hovermode="x unified",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
     else:
         st.info("Not enough cleared cases to plot ECDF.")
 
@@ -730,7 +880,7 @@ with tab2:
                             aspect="auto")
             fig.update_layout(margin=dict(t=30, b=10),
                               xaxis_title="Visa Type", yaxis_title="")
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
 
     with h2:
         st.subheader("Heatmap: Clear Rate %\n(Consulate × Visa Type)")
@@ -747,7 +897,7 @@ with tab2:
                             aspect="auto")
             fig.update_layout(margin=dict(t=30, b=10),
                               xaxis_title="Visa Type", yaxis_title="")
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -756,8 +906,8 @@ with tab2:
 with tab3:
     st.markdown("### Analyze waiting time by field of study and degree level")
     st.caption(
-        "**Degree** is inferred from the free-text Major field — look for "
-        "PhD / MS / Master / BS / Bachelor keywords."
+        "**Degree** is inferred from Major text. "
+        "**Major Group** also merges synonyms (e.g., CS = Computer Science)."
     )
 
     if "Degree" not in filt.columns:
@@ -769,7 +919,7 @@ with tab3:
     with d1:
         t3_visa = st.multiselect("Visa Type", visa_opts, default=visa_opts, key="t3v")
     with d2:
-        t3_kw   = st.text_input("Major keyword (e.g. Computer, Bio, EE)",
+        t3_kw   = st.text_input("Major keyword / group (e.g. Computer, CS, Bio, EE)",
                                 placeholder="Leave blank = all", key="t3kw")
     with d3:
         t3_cons = st.multiselect("Consulate", cons_opts, default=cons_opts, key="t3c")
@@ -778,7 +928,12 @@ with tab3:
     if t3_visa:
         deg_df = deg_df[deg_df["Visa Type"].isin(t3_visa)]
     if t3_kw.strip():
-        deg_df = deg_df[deg_df["Major"].str.contains(t3_kw.strip(), case=False, na=False)]
+        major_mask = pd.Series(False, index=deg_df.index)
+        if "Major" in deg_df.columns:
+            major_mask = major_mask | deg_df["Major"].str.contains(t3_kw.strip(), case=False, na=False)
+        if "Major Group" in deg_df.columns:
+            major_mask = major_mask | deg_df["Major Group"].str.contains(t3_kw.strip(), case=False, na=False)
+        deg_df = deg_df[major_mask]
     if t3_cons:
         deg_df = deg_df[deg_df["Consulate"].isin(t3_cons)]
 
@@ -801,7 +956,7 @@ with tab3:
                      barmode="stack", text_auto=True,
                      category_orders={"Degree": DEGREE_ORDER})
         fig.update_layout(margin=dict(t=20, b=10), xaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     with d_row2:
         st.subheader("Clear Rate by Degree Level")
@@ -819,7 +974,7 @@ with tab3:
             fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
             fig.update_layout(margin=dict(t=20, b=10), showlegend=False,
                                xaxis_title="", yaxis_range=[0, 110])
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
 
     st.divider()
 
@@ -845,50 +1000,128 @@ with tab3:
             fig.update_layout(margin=dict(t=20, b=10),
                                xaxis_title="", yaxis_title="Days to Clear",
                                legend_title="Degree")
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
     else:
         st.info("No cleared cases with waiting-day data for this filter.")
 
     st.divider()
 
-    # ── ECDF by degree ─────────────────────────────────────────────────────────
+    # ── ECDF by degree (with optional secondary split) ────────────────────────
     st.subheader("Cumulative % Cleared within N Days — by Degree Level")
+    st.caption("Optional split lets you compare combinations like Degree × Visa Type, Major, or Consulate.")
     if not deg_cleared.empty:
+        split_options = {"None (Degree only)": None}
+        if "Visa Type" in deg_cleared.columns:
+            split_options["Visa Type"] = "Visa Type"
+        if "Major Group" in deg_cleared.columns:
+            split_options["Major Group"] = "Major Group"
+        elif "Major" in deg_cleared.columns:
+            split_options["Major"] = "Major"
+        if "Consulate" in deg_cleared.columns:
+            split_options["Consulate"] = "Consulate"
+        if "Entry" in deg_cleared.columns:
+            split_options["Entry"] = "Entry"
+
+        e1, e2, e3 = st.columns(3)
+        with e1:
+            split_label = st.selectbox(
+                "Secondary split",
+                list(split_options.keys()),
+                index=0,
+                key="t3_ecdf_split",
+            )
+            split_col = split_options[split_label]
+        with e2:
+            min_n = st.slider("Min cases per line", 3, 30, 8, key="t3_ecdf_min_n")
+        with e3:
+            max_vals = st.slider("Max split values", 2, 12, 6, key="t3_ecdf_max_vals")
+
+        ecdf_df = deg_cleared.copy()
+        selected_vals = None
+        if split_col is not None:
+            top_vals = ecdf_df[split_col].dropna().value_counts().nlargest(max_vals).index.tolist()
+            if top_vals:
+                selected_vals = st.multiselect(
+                    f"{split_col} values",
+                    top_vals,
+                    default=top_vals,
+                    key="t3_ecdf_vals",
+                )
+                ecdf_df = ecdf_df[ecdf_df[split_col].isin(selected_vals)]
+
         fig = go.Figure()
-        for deg in DEGREE_ORDER:
-            sub = deg_cleared[deg_cleared["Degree"] == deg]["Waiting Days"].dropna()
-            if len(sub) < 3:
-                continue
-            trace = ecdf_traces(sub, name=deg, color=DEGREE_COLORS[deg])
-            fig.add_trace(trace)
-        fig.update_layout(
-            xaxis_title="Days to Clear",
-            yaxis_title="Cumulative %",
-            yaxis=dict(ticksuffix="%", range=[0, 102]),
-            legend_title="Degree",
-            hovermode="x unified",
-            margin=dict(t=30, b=10),
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        if split_col is None:
+            for deg in DEGREE_ORDER:
+                sub = ecdf_df[ecdf_df["Degree"] == deg]["Waiting Days"].dropna()
+                if len(sub) < min_n:
+                    continue
+                x = np.sort(sub.values)
+                y = np.arange(1, len(x) + 1) / len(x) * 100
+                fig.add_trace(go.Scatter(
+                    x=x, y=y, mode="lines",
+                    name=f"{deg} (n={len(sub)})",
+                    line=dict(color=DEGREE_COLORS[deg], width=2.2),
+                ))
+        else:
+            palette = px.colors.qualitative.Bold + px.colors.qualitative.Safe
+            vals = selected_vals if selected_vals is not None else []
+            dash_map = {
+                "PhD": "solid",
+                "PostDoc": "dash",
+                "Master's": "dot",
+                "MBA": "dashdot",
+                "Bachelor's": "longdash",
+                "Not Specified": "longdashdot",
+            }
+            for i, val in enumerate(vals):
+                for deg in DEGREE_ORDER:
+                    sub = ecdf_df[(ecdf_df["Degree"] == deg) & (ecdf_df[split_col] == val)]["Waiting Days"].dropna()
+                    if len(sub) < min_n:
+                        continue
+                    x = np.sort(sub.values)
+                    y = np.arange(1, len(x) + 1) / len(x) * 100
+                    fig.add_trace(go.Scatter(
+                        x=x, y=y, mode="lines",
+                        name=f"{deg} × {val} (n={len(sub)})",
+                        line=dict(
+                            color=palette[i % len(palette)],
+                            width=2,
+                            dash=dash_map.get(deg, "solid"),
+                        ),
+                    ))
+
+        if fig.data:
+            fig.update_layout(
+                xaxis_title="Days to Clear",
+                yaxis_title="Cumulative %",
+                yaxis=dict(ticksuffix="%", range=[0, 102]),
+                legend_title="Degree" if split_col is None else f"Degree × {split_col}",
+                hovermode="x unified",
+                margin=dict(t=30, b=10),
+            )
+            show_chart(fig)
+        else:
+            st.info("No ECDF lines satisfy current filters and minimum sample size.")
 
     st.divider()
 
     # ── Top majors by degree ───────────────────────────────────────────────────
-    st.subheader("Top Majors within Selected Degree Levels")
+    st.subheader("Top Major Groups within Selected Degree Levels")
     if not deg_df.empty:
-        top_n = st.slider("Show top N majors", 10, 40, 20, key="topn")
-        top_maj = deg_df["Major"].value_counts().nlargest(top_n).index
-        mdf = deg_df[deg_df["Major"].isin(top_maj)]
-        mc  = mdf.groupby(["Major", "Degree"]).size().reset_index(name="Count")
-        maj_ord = mdf["Major"].value_counts().index.tolist()
-        fig = px.bar(mc, x="Count", y="Major",
+        top_n = st.slider("Show top N major groups", 8, 25, 12, key="topn")
+        major_col = "Major Group" if "Major Group" in deg_df.columns else "Major"
+        top_maj = deg_df[major_col].value_counts().nlargest(top_n).index
+        mdf = deg_df[deg_df[major_col].isin(top_maj)]
+        mc  = mdf.groupby([major_col, "Degree"]).size().reset_index(name="Count")
+        maj_ord = mdf[major_col].value_counts().index.tolist()
+        fig = px.bar(mc, x="Count", y=major_col,
                      color="Degree", color_discrete_map=DEGREE_COLORS,
                      barmode="stack", orientation="h",
-                     category_orders={"Major": maj_ord, "Degree": DEGREE_ORDER},
+                     category_orders={major_col: maj_ord, "Degree": DEGREE_ORDER},
                      height=max(400, top_n * 22))
         fig.update_layout(margin=dict(t=20, b=10),
                           yaxis={"categoryorder": "total ascending"}, yaxis_title="")
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -940,7 +1173,7 @@ with tab4:
         barmode="overlay",
     )
     fig.update_layout(margin=dict(t=20, b=10))
-    st.plotly_chart(fig, use_container_width=True)
+    show_chart(fig)
 
     st.divider()
 
@@ -949,7 +1182,7 @@ with tab4:
     fig = px.box(cleared_all, x="Visa Type", y="Waiting Days",
                  color="Visa Type", points="outliers")
     fig.update_layout(margin=dict(t=20, b=10), showlegend=False, xaxis_title="")
-    st.plotly_chart(fig, use_container_width=True)
+    show_chart(fig)
 
     st.divider()
 
@@ -968,7 +1201,7 @@ with tab4:
                 trendline_color_override="black",
             )
             fig.update_layout(margin=dict(t=20, b=10), legend_title=sc_color)
-            st.plotly_chart(fig, use_container_width=True)
+            show_chart(fig)
 
     st.divider()
 
@@ -980,7 +1213,7 @@ with tab4:
         fig = px.line(mw, x="Month", y="Median Wait Days", color="Consulate",
                       markers=True)
         fig.update_layout(xaxis_tickangle=-45, margin=dict(t=20, b=60))
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -988,7 +1221,31 @@ with tab4:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab5:
     st.subheader("Raw Data Table")
-    st.dataframe(filt.reset_index(drop=True), use_container_width=True, height=500)
-    csv = filt.to_csv(index=False).encode("utf-8")
+    q1, q2 = st.columns([2, 1])
+    with q1:
+        row_search = st.text_input(
+            "Search rows",
+            placeholder="Try visa type, consulate, major, or status",
+            key="raw_search",
+        )
+    with q2:
+        visible_cols = st.multiselect(
+            "Columns",
+            filt.columns.tolist(),
+            default=filt.columns.tolist(),
+            key="raw_cols",
+        )
+
+    raw_df = filt.copy()
+    if row_search.strip():
+        patt = re.escape(row_search.strip())
+        mask = raw_df.astype(str).apply(lambda col: col.str.contains(patt, case=False, na=False))
+        raw_df = raw_df[mask.any(axis=1)]
+    if visible_cols:
+        raw_df = raw_df[visible_cols]
+
+    st.caption(f"Showing {len(raw_df):,} rows after search")
+    st.dataframe(raw_df.reset_index(drop=True), use_container_width=True, height=500)
+    csv = raw_df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️  Download CSV", csv,
                        file_name="checkee_data.csv", mime="text/csv")
