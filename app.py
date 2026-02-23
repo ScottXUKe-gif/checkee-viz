@@ -55,6 +55,15 @@ st.markdown(
         padding: 10px 12px;
         box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
     }
+    [data-testid="stPlotlyChart"] {
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid var(--panel-border);
+        border-radius: 12px;
+        padding: 6px;
+    }
+    .stButton > button {
+        border-radius: 10px;
+    }
     div[data-baseweb="tab-list"] button {
         border-radius: 10px 10px 0 0;
     }
@@ -285,6 +294,12 @@ def show_chart(fig: go.Figure, height: Optional[int] = None) -> None:
     fig.update_xaxes(showgrid=True, gridcolor="#e9eef5")
     fig.update_yaxes(showgrid=True, gridcolor="#e9eef5")
     st.plotly_chart(fig, use_container_width=True)
+
+
+def sanitize_selection(selected, options):
+    """Keep only valid selected values; fallback to all if empty."""
+    valid = [v for v in (selected or []) if v in options]
+    return valid or options
 
 
 # ── Persistent disk cache ─────────────────────────────────────────────────────
@@ -569,25 +584,63 @@ with st.sidebar:
     st.subheader("Global Filters")
 
     visa_opts = sorted(df["Visa Type"].dropna().unique()) if "Visa Type" in df.columns else []
-    preset = st.radio(
-        "Quick Visa Preset",
-        ["All", "Student (F/J)", "Work (H/L/O)"],
-        index=0,
-        key="visa_preset",
-    )
-    if preset == "Student (F/J)":
-        visa_default = [v for v in visa_opts if v.startswith("F") or v.startswith("J")]
-    elif preset == "Work (H/L/O)":
-        visa_default = [v for v in visa_opts if v.startswith("H") or v.startswith("L") or v.startswith("O")]
-    else:
-        visa_default = visa_opts
-    sel_visa  = st.multiselect("Visa Type", visa_opts, default=visa_default)
-
     cons_opts = sorted(df["Consulate"].dropna().unique()) if "Consulate" in df.columns else []
-    sel_cons  = st.multiselect("Consulate", cons_opts, default=cons_opts)
-
     entry_opts = sorted(df["Entry"].dropna().unique()) if "Entry" in df.columns else []
-    sel_entry  = st.multiselect("Entry Type", entry_opts, default=entry_opts)
+
+    if "g_visa" not in st.session_state:
+        st.session_state.g_visa = visa_opts.copy()
+    if "g_cons" not in st.session_state:
+        st.session_state.g_cons = cons_opts.copy()
+    if "g_entry" not in st.session_state:
+        st.session_state.g_entry = entry_opts.copy()
+
+    st.session_state.g_visa = sanitize_selection(st.session_state.g_visa, visa_opts)
+    st.session_state.g_cons = sanitize_selection(st.session_state.g_cons, cons_opts)
+    st.session_state.g_entry = sanitize_selection(st.session_state.g_entry, entry_opts)
+
+    focus_mode = st.selectbox(
+        "Quick Focus",
+        ["All Cases", "Student - New (F/J)", "Work (H/L/O)", "Renewals Only"],
+        index=0,
+        help="Apply a common filter combination with one click.",
+    )
+
+    fb1, fb2 = st.columns(2)
+    apply_focus = fb1.button("Apply Focus", use_container_width=True)
+    reset_filters = fb2.button("Reset Filters", use_container_width=True)
+
+    if apply_focus:
+        if focus_mode == "Student - New (F/J)":
+            st.session_state.g_visa = [v for v in visa_opts if v.startswith("F") or v.startswith("J")] or visa_opts
+            st.session_state.g_entry = [e for e in entry_opts if e.lower() == "new"] or entry_opts
+        elif focus_mode == "Work (H/L/O)":
+            st.session_state.g_visa = [v for v in visa_opts if v.startswith("H") or v.startswith("L") or v.startswith("O")] or visa_opts
+            st.session_state.g_entry = entry_opts.copy()
+        elif focus_mode == "Renewals Only":
+            st.session_state.g_entry = [e for e in entry_opts if "renew" in e.lower()] or entry_opts
+            st.session_state.g_visa = visa_opts.copy()
+        else:
+            st.session_state.g_visa = visa_opts.copy()
+            st.session_state.g_entry = entry_opts.copy()
+        st.session_state.g_cons = cons_opts.copy()
+        st.rerun()
+
+    if reset_filters:
+        st.session_state.g_visa = visa_opts.copy()
+        st.session_state.g_cons = cons_opts.copy()
+        st.session_state.g_entry = entry_opts.copy()
+        st.rerun()
+
+    sel_visa = st.multiselect("Visa Type", visa_opts, key="g_visa")
+    sel_cons = st.multiselect("Consulate", cons_opts, key="g_cons")
+    sel_entry = st.multiselect("Entry Type", entry_opts, key="g_entry")
+
+    with st.expander("Tips", expanded=False):
+        st.markdown(
+            "- Start with **Quick Focus**, then narrow by consulate.\n"
+            "- In charts, hover to compare rates and waiting days.\n"
+            "- Use **Raw Data** tab search before exporting CSV."
+        )
 
 # ── Apply global filters ──────────────────────────────────────────────────────
 
@@ -613,6 +666,19 @@ if st.session_state.get("is_sample"):
     st.caption(f"Showing **{len(filt):,}** synthetic records")
 else:
     st.caption(f"Showing **{len(filt):,}** records · {start_str} → {end_str}")
+
+st.caption(
+    f"Active filters: Visa {len(sel_visa)}/{max(len(visa_opts), 1)} · "
+    f"Consulate {len(sel_cons)}/{max(len(cons_opts), 1)} · "
+    f"Entry {len(sel_entry)}/{max(len(entry_opts), 1)}"
+)
+with st.expander("Quick Start", expanded=False):
+    st.markdown(
+        "1. Use **Quick Focus** in the sidebar to jump to a scenario.\n"
+        "2. Check **Location Comparison** for clear rate and median wait.\n"
+        "3. Use **Major & Degree** ECDF split for Degree x Visa/Major/Consulate.\n"
+        "4. Use **Raw Data** search for exact rows before download."
+    )
 
 total   = len(filt)
 pending = int((filt["Status"] == "Pending").sum())
