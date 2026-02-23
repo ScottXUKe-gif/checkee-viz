@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Disk cache — contains scraped data, can be large; regenerated on first run
+checkee_cache.json
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Streamlit config
+.streamlit/secrets.toml
